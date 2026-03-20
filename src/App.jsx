@@ -1,14 +1,15 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
+import { db } from "./firebase";
+import { ref, set, onValue, remove } from "firebase/database";
 
 const ROWS = 6;
 const COLS = 7;
 const EMPTY = 0;
 const P1 = 1;
 const P2 = 2;
-const POLL_MS = 600;
-const GAME_KEY = "unir-puntos-state";
-const CHAT_KEY = "unir-puntos-chat";
 const PASSWORD = "puntos2026";
+const GAME_REF = "unir-puntos/game";
+const CHAT_REF = "unir-puntos/chat";
 
 const createBoard = () => Array.from({ length: ROWS }, () => Array(COLS).fill(EMPTY));
 
@@ -33,24 +34,14 @@ const checkWin = (board, player) => {
 
 const isFull = (board) => board[0].every(cell => cell !== EMPTY);
 const getDropRow = (board, col) => {
-  for (let r = ROWS - 1; r >= 0; r--) {
-    if (board[r][col] === EMPTY) return r;
-  }
+  for (let r = ROWS - 1; r >= 0; r--) { if (board[r][col] === EMPTY) return r; }
   return -1;
 };
 
 const defaultState = () => ({
-  phase: "lobby",
-  board: createBoard(),
-  current: P1,
-  winner: null,
-  winCells: null,
-  lastMove: null,
-  isDraw: false,
-  players: { [P1]: null, [P2]: null },
-  scores: { [P1]: 0, [P2]: 0 },
-  moveCount: 0,
-  version: 0,
+  phase: "lobby", board: createBoard(), current: P1, winner: null, winCells: null,
+  lastMove: null, isDraw: false, players: { 1: null, 2: null },
+  scores: { 1: 0, 2: 0 }, moveCount: 0, version: 0,
 });
 
 const Orb = ({ color, size, x, y, dur, delay }) => (
@@ -79,8 +70,7 @@ const Piece = ({ color, isWinning, isLast, isNew }) => {
       )}
       <div className="absolute rounded-full" style={{
         width: "38%", height: "22%", top: "14%", left: "22%",
-        background: "linear-gradient(180deg, rgba(255,255,255,0.45), transparent)",
-        borderRadius: "50%",
+        background: "linear-gradient(180deg, rgba(255,255,255,0.45), transparent)", borderRadius: "50%",
       }} />
     </div>
   );
@@ -105,6 +95,22 @@ const colorGrad = (c) => c === "green"
   ? "linear-gradient(135deg, #4ade80, #16a34a)"
   : "linear-gradient(135deg, #fbbf24, #f59e0b)";
 
+// ════════════════════════════════════
+// FIREBASE HELPERS
+// ════════════════════════════════════
+const fbSaveGame = async (state) => {
+  try { await set(ref(db, GAME_REF), state); } catch (e) { console.error("Firebase save error:", e); }
+};
+const fbSaveChat = async (msgs) => {
+  try { await set(ref(db, CHAT_REF), msgs); } catch (e) { console.error("Firebase chat error:", e); }
+};
+const fbDeleteAll = async () => {
+  try { await remove(ref(db, "unir-puntos")); } catch (e) { console.error("Firebase delete error:", e); }
+};
+
+// ════════════════════════════════════
+// MAIN COMPONENT
+// ════════════════════════════════════
 export default function UnirPuntos() {
   const [authed, setAuthed] = useState(false);
   const [pwInput, setPwInput] = useState("");
@@ -121,10 +127,9 @@ export default function UnirPuntos() {
   const [hoverCol, setHoverCol] = useState(-1);
   const [animCell, setAnimCell] = useState(null);
   const [animating, setAnimating] = useState(false);
-  const [lastSeen, setLastSeen] = useState(0);
+  const [tab, setTab] = useState("board");
 
   const chatEndRef = useRef(null);
-  const pollRef = useRef(null);
   const prevMoveCount = useRef(0);
 
   const playerName = (pid, state = gs) => {
@@ -132,66 +137,74 @@ export default function UnirPuntos() {
     return p ? p.name : `Jugador ${pid}`;
   };
 
-  const saveState = async (s) => {
-    try { await window.storage.set(GAME_KEY, JSON.stringify(s), true); } catch(e) { console.error(e); }
-  };
-  const loadState = async () => {
-    try { const r = await window.storage.get(GAME_KEY, true); if (r?.value) return JSON.parse(r.value); } catch {} return null;
-  };
-  const saveChat = async (m) => {
-    try { await window.storage.set(CHAT_KEY, JSON.stringify(m), true); } catch(e) { console.error(e); }
-  };
-  const loadChat = async () => {
-    try { const r = await window.storage.get(CHAT_KEY, true); if (r?.value) return JSON.parse(r.value); } catch {} return [];
+  // Sanitize Firebase data (Firebase drops null values and converts numeric keys to arrays)
+  const sanitize = (data) => {
+    if (!data) return defaultState();
+    const d = { ...defaultState(), ...data };
+    // Firebase may convert players object to array or drop null entries
+    if (!d.players || Array.isArray(d.players)) {
+      const p = d.players || {};
+      d.players = { 1: p[1] || null, 2: p[2] || null };
+    } else {
+      d.players = { 1: d.players[1] || null, 2: d.players[2] || null };
+    }
+    // Ensure board is valid
+    if (!d.board || !Array.isArray(d.board) || d.board.length !== ROWS) {
+      d.board = createBoard();
+    }
+    // Ensure scores
+    if (!d.scores) d.scores = { 1: 0, 2: 0 };
+    // Ensure winCells is array or null
+    if (d.winCells && !Array.isArray(d.winCells)) d.winCells = null;
+    return d;
   };
 
-  // Polling
+  // ── Firebase real-time listeners ──
   useEffect(() => {
     if (!authed) return;
-    const poll = async () => {
-      const remote = await loadState();
-      if (remote && remote.version > lastSeen) {
-        if (remote.lastMove && remote.moveCount > prevMoveCount.current) {
-          setAnimCell(remote.lastMove);
-          setTimeout(() => setAnimCell(null), 480);
-        }
-        prevMoveCount.current = remote.moveCount;
-        setGs(remote);
-        setLastSeen(remote.version);
+
+    const gameUnsub = onValue(ref(db, GAME_REF), (snapshot) => {
+      const raw = snapshot.val();
+      const data = sanitize(raw);
+      // Trigger drop animation for new moves
+      if (data.lastMove && data.moveCount > prevMoveCount.current) {
+        setAnimCell(data.lastMove);
+        setTimeout(() => setAnimCell(null), 480);
       }
-      const msgs = await loadChat();
-      if (msgs && msgs.length !== chatMsgs.length) setChatMsgs(msgs);
-    };
-    poll();
-    pollRef.current = setInterval(poll, POLL_MS);
-    return () => clearInterval(pollRef.current);
-  }, [authed, lastSeen, chatMsgs.length]);
+      prevMoveCount.current = data.moveCount || 0;
+      setGs(data);
+    });
+
+    const chatUnsub = onValue(ref(db, CHAT_REF), (snapshot) => {
+      const data = snapshot.val();
+      if (data) setChatMsgs(data);
+    });
+
+    return () => { gameUnsub(); chatUnsub(); };
+  }, [authed]);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMsgs]);
 
-  // Actions
+  // ── Actions ──
   const handleCreateRoom = async () => {
     if (!myName.trim()) return;
     const color = myColor || "green";
-    const fresh = { ...defaultState(), players: { [P1]: { name: myName.trim(), color }, [P2]: null }, version: 1 };
-    await saveState(fresh);
-    const msgs = [{ type: "system", text: `🎮 ${myName.trim()} ha creado la sala.`, ts: Date.now() }];
-    await saveChat(msgs);
-    setMyId(P1); setMyColor(color); setGs(fresh); setLastSeen(1); setChatMsgs(msgs);
+    const fresh = { ...defaultState(), players: { 1: { name: myName.trim(), color }, 2: null }, version: 1 };
+    await fbSaveGame(fresh);
+    await fbSaveChat([{ type: "system", text: `🎮 ${myName.trim()} ha creado la sala.`, ts: Date.now() }]);
+    setMyId(P1); setMyColor(color);
     prevMoveCount.current = 0;
   };
 
   const handleJoinRoom = async () => {
     if (!joinName.trim()) return;
-    const remote = await loadState();
-    if (!remote?.players[P1]) return;
-    const p2Color = remote.players[P1].color === "green" ? "yellow" : "green";
-    const updated = { ...remote, players: { ...remote.players, [P2]: { name: joinName.trim(), color: p2Color } }, phase: "playing", version: remote.version + 1 };
-    await saveState(updated);
-    const msgs = await loadChat();
-    const newMsgs = [...msgs, { type: "system", text: `🎮 ${joinName.trim()} se ha unido. ¡A jugar!`, ts: Date.now() }];
-    await saveChat(newMsgs);
-    setMyId(P2); setMyName(joinName.trim()); setMyColor(p2Color); setGs(updated); setLastSeen(updated.version); setChatMsgs(newMsgs);
+    if (!gs.players[1]) return;
+    const p2Color = gs.players[1].color === "green" ? "yellow" : "green";
+    const updated = { ...gs, players: { ...gs.players, 2: { name: joinName.trim(), color: p2Color } }, phase: "playing", version: (gs.version || 0) + 1 };
+    await fbSaveGame(updated);
+    const newMsgs = [...(chatMsgs || []), { type: "system", text: `🎮 ${joinName.trim()} se ha unido. ¡A jugar!`, ts: Date.now() }];
+    await fbSaveChat(newMsgs);
+    setMyId(P2); setMyName(joinName.trim()); setMyColor(p2Color);
     prevMoveCount.current = 0;
   };
 
@@ -202,39 +215,38 @@ export default function UnirPuntos() {
     setAnimating(true);
     const newBoard = gs.board.map(r => [...r]);
     newBoard[row][col] = gs.current;
-    let ns = { ...gs, board: newBoard, lastMove: { row, col }, moveCount: gs.moveCount + 1, version: gs.version + 1 };
+    let ns = { ...gs, board: newBoard, lastMove: { row, col }, moveCount: (gs.moveCount || 0) + 1, version: (gs.version || 0) + 1 };
     const win = checkWin(newBoard, gs.current);
-    if (win) { ns.winner = gs.current; ns.winCells = win; ns.scores = { ...gs.scores, [gs.current]: gs.scores[gs.current] + 1 }; ns.phase = "over"; }
+    if (win) { ns.winner = gs.current; ns.winCells = win; ns.scores = { ...gs.scores, [gs.current]: (gs.scores[gs.current] || 0) + 1 }; ns.phase = "over"; }
     else if (isFull(newBoard)) { ns.isDraw = true; ns.phase = "over"; }
     else { ns.current = gs.current === P1 ? P2 : P1; }
     setAnimCell({ row, col });
     prevMoveCount.current = ns.moveCount;
-    await saveState(ns);
-    setGs(ns); setLastSeen(ns.version);
-    if (win) { const m = [...chatMsgs, { type: "system", text: `🏆 ¡${playerName(gs.current, ns)} ha ganado!`, ts: Date.now() }]; await saveChat(m); setChatMsgs(m); }
-    else if (ns.isDraw) { const m = [...chatMsgs, { type: "system", text: "🤝 ¡Empate!", ts: Date.now() }]; await saveChat(m); setChatMsgs(m); }
+    await fbSaveGame(ns);
+    if (win) { const m = [...(chatMsgs || []), { type: "system", text: `🏆 ¡${playerName(gs.current, ns)} ha ganado!`, ts: Date.now() }]; await fbSaveChat(m); }
+    else if (ns.isDraw) { const m = [...(chatMsgs || []), { type: "system", text: "🤝 ¡Empate!", ts: Date.now() }]; await fbSaveChat(m); }
     setTimeout(() => { setAnimating(false); setAnimCell(null); }, 480);
   };
 
   const handlePlayAgain = async () => {
-    const ns = { ...gs, board: createBoard(), current: P1, winner: null, winCells: null, lastMove: null, isDraw: false, phase: "playing", moveCount: 0, version: gs.version + 1 };
-    await saveState(ns);
-    const m = [...chatMsgs, { type: "system", text: "🔄 ¡Nueva partida!", ts: Date.now() }];
-    await saveChat(m); setGs(ns); setLastSeen(ns.version); setChatMsgs(m);
+    const ns = { ...gs, board: createBoard(), current: P1, winner: null, winCells: null, lastMove: null, isDraw: false, phase: "playing", moveCount: 0, version: (gs.version || 0) + 1 };
+    await fbSaveGame(ns);
+    const m = [...(chatMsgs || []), { type: "system", text: "🔄 ¡Nueva partida!", ts: Date.now() }];
+    await fbSaveChat(m);
     prevMoveCount.current = 0;
   };
 
   const handleFullReset = async () => {
-    try { await window.storage.delete(GAME_KEY, true); } catch {}
-    try { await window.storage.delete(CHAT_KEY, true); } catch {}
-    setGs(defaultState()); setChatMsgs([]); setMyId(null); setMyName(""); setMyColor(null); setJoinName(""); setLastSeen(0);
+    await fbDeleteAll();
+    setGs(defaultState()); setChatMsgs([]); setMyId(null); setMyName(""); setMyColor(null); setJoinName("");
     prevMoveCount.current = 0;
   };
 
   const sendChat = async () => {
     if (!chatInput.trim() || !myId) return;
-    const m = [...chatMsgs, { type: "player", player: myId, name: myName, text: chatInput.trim(), ts: Date.now() }];
-    await saveChat(m); setChatMsgs(m); setChatInput("");
+    const m = [...(chatMsgs || []), { type: "player", player: myId, name: myName, text: chatInput.trim(), ts: Date.now() }];
+    await fbSaveChat(m);
+    setChatInput("");
   };
 
   const isWinCell = (r, c) => gs.winCells?.some(([wr, wc]) => wr === r && wc === c);
@@ -270,7 +282,6 @@ export default function UnirPuntos() {
             style={{ background: "linear-gradient(135deg, #4ade80, #16a34a)", boxShadow: "0 8px 30px rgba(74,222,128,0.25)", fontFamily: "'Outfit', sans-serif" }}>
             Entrar
           </button>
-
         </div>
       </div>
     );
@@ -278,8 +289,8 @@ export default function UnirPuntos() {
 
   // ═══ LOBBY ═══
   if (!myId) {
-    const roomExists = gs.players[P1] !== null;
-    const roomFull = gs.players[P1] !== null && gs.players[P2] !== null;
+    const roomExists = !!(gs.players && gs.players[1]);
+    const roomFull = !!(gs.players && gs.players[1] && gs.players[2]);
     return (
       <div className="relative min-h-screen w-full overflow-hidden flex items-center justify-center" style={{ background: "linear-gradient(135deg, #0a0e1a 0%, #141830 50%, #0a0e1a 100%)" }}>
         <style>{STYLES}</style>
@@ -303,7 +314,7 @@ export default function UnirPuntos() {
               </div>
               <button onClick={handleCreateRoom} disabled={!myName.trim() || !myColor}
                 className="w-full py-3.5 rounded-xl text-white font-bold transition-all hover:scale-[1.03] active:scale-[0.98] disabled:opacity-30 disabled:hover:scale-100"
-                style={{ background: "linear-gradient(135deg, #4c1d95, #1e3a5f)", boxShadow: "0 8px 30px rgba(76,29,149,0.35)", fontFamily: "'Outfit', sans-serif" }}>
+                style={{ background: "linear-gradient(135deg, #4c1d95, #1e3a5f)", boxShadow: "0 8px 30px rgba(76,29,149,0.3)", fontFamily: "'Outfit', sans-serif" }}>
                 Crear sala 🚀
               </button>
             </div>
@@ -314,17 +325,17 @@ export default function UnirPuntos() {
               <div className="flex items-center gap-3 mb-5 px-4 py-3 rounded-xl" style={{ background: "rgba(74,222,128,0.06)", border: "1px solid rgba(74,222,128,0.12)" }}>
                 <div className="w-3 h-3 rounded-full" style={{ background: "#4ade80", animation: "winPulse 1.2s ease-in-out infinite alternate" }} />
                 <span className="text-white/70 text-sm" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-                  <span className="text-white font-semibold">{gs.players[P1]?.name}</span> está esperando...
+                  <span className="text-white font-semibold">{gs.players[1]?.name}</span> está esperando...
                 </span>
               </div>
               <label className="block text-white/60 text-xs uppercase tracking-wider mb-2" style={{ fontFamily: "'DM Sans', sans-serif" }}>Tu nombre</label>
               <input className="w-full mb-4 px-4 py-3 rounded-xl text-white outline-none" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", fontFamily: "'DM Sans', sans-serif" }} value={joinName} onChange={(e) => setJoinName(e.target.value)} placeholder="Ej: Carlos" />
               <div className="flex items-center gap-2 mb-5 px-3 py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.04)" }}>
-                <div className="w-4 h-4 rounded-full" style={{ background: colorGrad(gs.players[P1]?.color === "green" ? "yellow" : "green") }} />
-                <span className="text-white/50 text-xs" style={{ fontFamily: "'DM Sans', sans-serif" }}>Tu color: {gs.players[P1]?.color === "green" ? "Amarillo" : "Verde"}</span>
+                <div className="w-4 h-4 rounded-full" style={{ background: colorGrad(gs.players[1]?.color === "green" ? "yellow" : "green") }} />
+                <span className="text-white/50 text-xs" style={{ fontFamily: "'DM Sans', sans-serif" }}>Tu color: {gs.players[1]?.color === "green" ? "Amarillo" : "Verde"}</span>
               </div>
               <button onClick={handleJoinRoom} disabled={!joinName.trim()} className="w-full py-3.5 rounded-xl text-white font-bold transition-all hover:scale-[1.03] active:scale-[0.98] disabled:opacity-30"
-                style={{ background: "linear-gradient(135deg, #4c1d95, #1e3a5f)", boxShadow: "0 8px 30px rgba(76,29,149,0.35)", fontFamily: "'Outfit', sans-serif" }}>
+                style={{ background: "linear-gradient(135deg, #4c1d95, #1e3a5f)", boxShadow: "0 8px 30px rgba(76,29,149,0.3)", fontFamily: "'Outfit', sans-serif" }}>
                 Unirse 🎯
               </button>
             </div>
@@ -332,10 +343,10 @@ export default function UnirPuntos() {
 
           {roomFull && (
             <div className="text-center" style={{ animation: "fadeUp 0.4s ease-out" }}>
-              <p className="text-white/50 text-sm mb-4" style={{ fontFamily: "'DM Sans', sans-serif" }}>Partida en curso entre <span className="text-white font-semibold">{gs.players[P1]?.name}</span> y <span className="text-white font-semibold">{gs.players[P2]?.name}</span>.</p>
+              <p className="text-white/50 text-sm mb-4" style={{ fontFamily: "'DM Sans', sans-serif" }}>Partida en curso entre <span className="text-white font-semibold">{gs.players[1]?.name}</span> y <span className="text-white font-semibold">{gs.players[2]?.name}</span>.</p>
               <div className="flex gap-3">
-                <button onClick={() => { setMyId(P1); setMyName(gs.players[P1].name); setMyColor(gs.players[P1].color); }} className="flex-1 py-3 rounded-xl text-white font-semibold transition-all hover:scale-105" style={{ background: colorGrad(gs.players[P1].color), fontFamily: "'Outfit', sans-serif" }}>Soy {gs.players[P1].name}</button>
-                <button onClick={() => { setMyId(P2); setMyName(gs.players[P2].name); setMyColor(gs.players[P2].color); }} className="flex-1 py-3 rounded-xl text-white font-semibold transition-all hover:scale-105" style={{ background: colorGrad(gs.players[P2].color), fontFamily: "'Outfit', sans-serif" }}>Soy {gs.players[P2].name}</button>
+                <button onClick={() => { setMyId(P1); setMyName(gs.players[1]?.name || "J1"); setMyColor(gs.players[1]?.color || "green"); }} className="flex-1 py-3 rounded-xl text-white font-semibold transition-all hover:scale-105" style={{ background: colorGrad(gs.players[1]?.color || "green"), fontFamily: "'Outfit', sans-serif" }}>Soy {gs.players[1]?.name}</button>
+                <button onClick={() => { setMyId(P2); setMyName(gs.players[2]?.name || "J2"); setMyColor(gs.players[2]?.color || "yellow"); }} className="flex-1 py-3 rounded-xl text-white font-semibold transition-all hover:scale-105" style={{ background: colorGrad(gs.players[2]?.color || "yellow"), fontFamily: "'Outfit', sans-serif" }}>Soy {gs.players[2]?.name}</button>
               </div>
               <button onClick={handleFullReset} className="mt-3 w-full py-2.5 rounded-xl text-white/40 text-sm transition-all hover:text-white/70" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", fontFamily: "'DM Sans', sans-serif" }}>Reiniciar todo</button>
             </div>
@@ -354,7 +365,7 @@ export default function UnirPuntos() {
         <div className="relative z-10 p-8 rounded-3xl max-w-sm w-full mx-4 text-center" style={{ background: "rgba(255,255,255,0.04)", backdropFilter: "blur(24px)", border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 30px 80px rgba(0,0,0,0.5)", animation: "fadeUp 0.5s ease-out" }}>
           <div className="w-10 h-10 mx-auto mb-5 rounded-full border-2 border-t-transparent" style={{ borderColor: "rgba(76,29,149,0.5)", borderTopColor: "transparent", animation: "spin 1s linear infinite" }} />
           <h2 className="text-xl font-bold text-white/90 mb-2" style={{ fontFamily: "'Outfit', sans-serif" }}>Esperando rival...</h2>
-          <p className="text-white/40 text-sm mb-5" style={{ fontFamily: "'DM Sans', sans-serif" }}>Comparte este artefacto con otro jugador para que se una</p>
+          <p className="text-white/40 text-sm mb-5" style={{ fontFamily: "'DM Sans', sans-serif" }}>Comparte la URL con otro jugador para que se una</p>
           <div className="flex items-center gap-2 justify-center px-4 py-2.5 rounded-xl mx-auto" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
             <div className="w-4 h-4 rounded-full" style={{ background: colorGrad(myColor) }} />
             <span className="text-white/60 text-sm" style={{ fontFamily: "'DM Sans', sans-serif" }}>{myName} · {myColor === "green" ? "Verde" : "Amarillo"}</span>
@@ -366,11 +377,8 @@ export default function UnirPuntos() {
   }
 
   // ═══ GAME ═══
-  const [tab, setTab] = useState("board"); // "board" | "chat"
   const isMyTurn = gs.current === myId;
   const curGrad = gs.players[gs.current] ? colorGrad(gs.players[gs.current].color) : "#888";
-
-  // Cell size: 44px on mobile (44*7 + gaps = ~330px fits iPhone 11 at 375px), 56px on desktop
   const CELL = typeof window !== "undefined" && window.innerWidth < 640 ? 44 : 56;
   const GAP = 3;
 
@@ -381,8 +389,6 @@ export default function UnirPuntos() {
       <Orb color="radial-gradient(circle, #06b6d4, transparent)" size="280px" x="85%" y="-8%" dur={10} delay={3} />
 
       <div className="relative z-10 flex flex-col items-center w-full max-w-2xl mx-auto px-2 sm:px-4 py-3 sm:py-6 min-h-screen">
-
-        {/* Header */}
         <h1 className="text-xl sm:text-2xl font-black mb-1" style={{ fontFamily: "'Outfit', sans-serif", background: "linear-gradient(90deg, #4ade80, #fbbf24, #4ade80)", backgroundSize: "200% auto", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", animation: "shimmer 3s linear infinite" }}>Unir Puntos</h1>
 
         {/* Scoreboard */}
@@ -397,9 +403,9 @@ export default function UnirPuntos() {
           ))}
         </div>
 
-        {/* Tab switcher (mobile only) */}
+        {/* Tab switcher (mobile) */}
         <div className="flex sm:hidden w-full gap-1 mb-2 px-1">
-          {[{id: "board", label: "🎮 Tablero"}, {id: "chat", label: `💬 Chat${chatMsgs.filter(m => m.type === "player").length > 0 ? ` (${chatMsgs.filter(m => m.type === "player").length})` : ""}`}].map(t => (
+          {[{id: "board", label: "🎮 Tablero"}, {id: "chat", label: `💬 Chat${(chatMsgs || []).filter(m => m.type === "player").length > 0 ? ` (${(chatMsgs || []).filter(m => m.type === "player").length})` : ""}`}].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all ${tab === t.id ? 'text-white' : 'text-white/35'}`}
               style={{ background: tab === t.id ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.02)", border: tab === t.id ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(255,255,255,0.04)", fontFamily: "'DM Sans', sans-serif" }}>
@@ -408,13 +414,10 @@ export default function UnirPuntos() {
           ))}
         </div>
 
-        {/* Main content area */}
         <div className="flex flex-col lg:flex-row items-start justify-center gap-4 w-full">
 
-          {/* BOARD — hidden on mobile when chat tab is active */}
+          {/* BOARD */}
           <div className={`flex flex-col items-center w-full lg:w-auto ${tab !== "board" ? "hidden sm:flex" : "flex"}`} style={{ animation: "fadeUp 0.5s ease-out" }}>
-
-            {/* Turn indicator */}
             {!gs.winner && !gs.isDraw && gs.phase === "playing" && (
               <div className="flex items-center gap-2 mb-2 px-3 py-1.5 rounded-xl" style={{ background: isMyTurn ? "rgba(74,222,128,0.06)" : "rgba(255,255,255,0.03)", border: isMyTurn ? "1px solid rgba(74,222,128,0.12)" : "1px solid rgba(255,255,255,0.05)" }}>
                 <div className="w-2.5 h-2.5 rounded-full" style={{ background: curGrad, animation: "winPulse 1s ease-in-out infinite alternate" }} />
@@ -424,9 +427,7 @@ export default function UnirPuntos() {
               </div>
             )}
 
-            {/* Board */}
             <div className="p-1.5 sm:p-2.5 rounded-2xl sm:rounded-3xl" style={{ background: "linear-gradient(145deg, rgba(20,24,48,0.95), rgba(10,14,26,0.98))", backdropFilter: "blur(20px)", border: "1px solid rgba(255,255,255,0.06)", boxShadow: "0 25px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.03)" }}>
-              {/* Preview row */}
               <div className="flex mb-0.5 px-0.5" style={{ gap: `${GAP}px` }}>
                 {Array.from({ length: COLS }).map((_, c) => {
                   const show = hoverCol === c && isMyTurn && !gs.winner && !gs.isDraw && getDropRow(gs.board, c) >= 0;
@@ -439,7 +440,6 @@ export default function UnirPuntos() {
                   );
                 })}
               </div>
-              {/* Grid */}
               <div className="rounded-xl sm:rounded-2xl p-0.5 sm:p-1" style={{ background: "linear-gradient(180deg, rgba(15,23,42,0.4), rgba(20,24,48,0.5))", border: "1px solid rgba(255,255,255,0.03)" }}>
                 {gs.board.map((row, r) => (
                   <div key={r} className="flex" style={{ gap: `${GAP}px`, marginBottom: r < ROWS - 1 ? `${GAP}px` : 0 }}>
@@ -460,7 +460,6 @@ export default function UnirPuntos() {
               </div>
             </div>
 
-            {/* Result */}
             {(gs.winner || gs.isDraw) && (
               <div className="mt-3 flex flex-col items-center gap-2.5 px-5 py-4 rounded-2xl" style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(20px)", border: "1px solid rgba(255,255,255,0.08)", animation: "bounceIn 0.5s ease-out" }}>
                 <div className="text-lg sm:text-xl font-bold text-white" style={{ fontFamily: "'Outfit', sans-serif" }}>
@@ -474,7 +473,7 @@ export default function UnirPuntos() {
             )}
           </div>
 
-          {/* CHAT — always visible on desktop, tab-toggled on mobile */}
+          {/* CHAT */}
           <div className={`w-full lg:w-72 flex flex-col rounded-2xl overflow-hidden flex-shrink-0 ${tab !== "chat" ? "hidden sm:flex" : "flex"}`}
             style={{ background: "rgba(255,255,255,0.03)", backdropFilter: "blur(20px)", border: "1px solid rgba(255,255,255,0.06)", boxShadow: "0 15px 40px rgba(0,0,0,0.3)", height: tab === "chat" ? "calc(100vh - 200px)" : "420px", maxHeight: "480px", animation: "fadeUp 0.6s ease-out 0.15s both" }}>
             <div className="px-4 py-2 flex items-center justify-between" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
@@ -485,7 +484,7 @@ export default function UnirPuntos() {
               </div>
             </div>
             <div className="flex-1 overflow-y-auto p-3 space-y-2" style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.08) transparent" }}>
-              {chatMsgs.map((msg, i) =>
+              {(chatMsgs || []).map((msg, i) =>
                 msg.type === "system" ? (
                   <div key={i} className="text-center text-white/25 text-xs py-1" style={{ fontFamily: "'DM Sans', sans-serif" }}>{msg.text}</div>
                 ) : (
