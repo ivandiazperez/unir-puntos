@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "../firebase";
 import { ref, set, onValue, remove } from "firebase/database";
-import { STYLES, Orb, Orbs, colorGrad, BG, PANEL, BackButton, P1, P2, sanitizePlayers } from "./shared";
+import { STYLES, Orb, Orbs, colorGrad, BG, PANEL, BackButton, P1, P2, sanitizePlayers, ChatBox } from "./shared.jsx";
 
 const ROWS = 6, COLS = 7, EMPTY = 0;
 const GAME_REF = "unir-puntos/game";
@@ -265,14 +265,7 @@ Which single column (0-6) is the best move for X? Consider: winning moves, block
             {(gs.winner||gs.isDraw)&&(<div className="mt-3 flex flex-col items-center gap-2.5 px-5 py-4 rounded-2xl" style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.08)",animation:"bounceIn 0.5s ease-out"}}><div className="text-lg sm:text-xl font-bold text-white" style={{fontFamily:"'Outfit',sans-serif"}}>{gs.isDraw?"🤝 ¡Empate!":gs.winner===myId?"🏆 ¡Has ganado!":`😔 ${pName(gs.winner)} gana`}</div><div className="flex gap-2.5"><button onClick={playAgain} className="px-4 py-2 rounded-xl text-white text-sm font-semibold hover:scale-105 transition-all" style={{background:"linear-gradient(135deg,#4c1d95,#1e3a5f)",fontFamily:"'Outfit',sans-serif"}}>Otra vez</button><button onClick={fullReset} className="px-4 py-2 rounded-xl text-white/50 text-sm font-semibold hover:text-white/80 transition-all" style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)"}}>Nueva sala</button></div></div>)}
           </div>
           {/* Chat */}
-          <div className={`w-full lg:w-72 flex flex-col rounded-2xl overflow-hidden flex-shrink-0 ${tab!=="chat"?"hidden sm:flex":"flex"}`} style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",height:tab==="chat"?"calc(100vh - 200px)":"420px",maxHeight:"480px",animation:"fadeUp 0.6s ease-out 0.15s both"}}>
-            <div className="px-4 py-2 flex items-center justify-between" style={{borderBottom:"1px solid rgba(255,255,255,0.05)"}}><span className="text-white/60 text-sm font-semibold" style={{fontFamily:"'DM Sans',sans-serif"}}>💬 Chat</span><div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-green-400" style={{animation:"winPulse 2s ease-in-out infinite alternate"}}/><span className="text-white/30 text-xs" style={{fontFamily:"'DM Sans',sans-serif"}}>en vivo</span></div></div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2" style={{scrollbarWidth:"thin",scrollbarColor:"rgba(255,255,255,0.08) transparent"}}>
-              {(chatMsgs||[]).map((msg,i)=>msg.type==="system"?<div key={i} className="text-center text-white/25 text-xs py-1" style={{fontFamily:"'DM Sans',sans-serif"}}>{msg.text}</div>:(<div key={i} className={`flex gap-2 items-start ${msg.player===myId?'flex-row-reverse':''}`} style={{animation:"fadeUp 0.25s ease-out"}}><div className="w-5 h-5 rounded-full flex-shrink-0 mt-0.5" style={{background:gs.players[msg.player]?colorGrad(gs.players[msg.player].color):"#555"}}/><div><div className={`text-white/40 text-xs mb-0.5 ${msg.player===myId?'text-right':''}`} style={{fontFamily:"'DM Sans',sans-serif"}}>{msg.name}</div><div className="text-white/85 text-sm px-3 py-1.5 rounded-xl" style={{background:msg.player===myId?"rgba(76,29,149,0.15)":"rgba(255,255,255,0.05)",fontFamily:"'DM Sans',sans-serif"}}>{msg.text}</div></div></div>))}
-              <div ref={chatEndRef}/>
-            </div>
-            <div className="p-2.5 flex gap-2" style={{borderTop:"1px solid rgba(255,255,255,0.05)"}}><input className="flex-1 px-3 py-2 rounded-xl text-white text-sm outline-none" style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.06)",fontFamily:"'DM Sans',sans-serif"}} placeholder="Mensaje..." value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChat()}/><button onClick={sendChat} className="px-3.5 py-2 rounded-xl text-white text-sm font-semibold hover:scale-105 transition-all" style={{background:"linear-gradient(135deg,#4c1d95,#1e3a5f)"}}>➤</button></div>
-          </div>
+          <ChatBox chatMsgs={chatMsgs} chatInput={chatInput} setChatInput={setChatInput} sendChat={sendChat} myId={myId} players={gs.players} tab={tab} accentGrad="linear-gradient(135deg,#4c1d95,#1e3a5f)" />
         </div>
       </div>
     </div>);

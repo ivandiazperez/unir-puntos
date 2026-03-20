@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { db } from "../firebase";
 import { ref, set, onValue, remove } from "firebase/database";
-import { STYLES, Orbs, Orb, colorGrad, BG, PANEL, BackButton, P1, P2, sanitizePlayers } from "./shared.jsx";
+import { STYLES, Orbs, Orb, colorGrad, BG, PANEL, BackButton, P1, P2, sanitizePlayers, ChatBox } from "./shared.jsx";
 
 const GAME_REF = "bolos/game";
 const CHAT_REF = "bolos/chat";
@@ -469,15 +469,7 @@ export default function Bolos({ onBack }) {
           </div>
 
           {/* Chat */}
-          <div className={`w-full lg:w-64 flex flex-col rounded-2xl overflow-hidden flex-shrink-0 ${tab !== "chat" ? "hidden sm:flex" : "flex"}`} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", height: tab === "chat" ? "calc(100vh - 200px)" : "380px", maxHeight: "420px" }}>
-            <div className="px-4 py-2 flex items-center justify-between" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}><span className="text-white/60 text-sm font-semibold">💬 Chat</span></div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2" style={{ scrollbarWidth: "thin" }}>
-              {(chatMsgs || []).map((msg, i) => msg.type === "system" ? <div key={i} className="text-center text-white/25 text-xs py-1">{msg.text}</div> : (
-                <div key={i} className={`flex gap-2 items-start ${msg.player === myId ? 'flex-row-reverse' : ''}`}><div className="w-5 h-5 rounded-full flex-shrink-0 mt-0.5" style={{ background: gs.players[msg.player] ? colorGrad(gs.players[msg.player].color) : "#555" }} /><div><div className={`text-white/40 text-xs mb-0.5 ${msg.player === myId ? 'text-right' : ''}`}>{msg.name}</div><div className="text-white/85 text-sm px-3 py-1.5 rounded-xl" style={{ background: msg.player === myId ? "rgba(249,115,22,0.12)" : "rgba(255,255,255,0.05)" }}>{msg.text}</div></div></div>))}
-              <div ref={chatEndRef} />
-            </div>
-            <div className="p-2.5 flex gap-2" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}><input className="flex-1 px-3 py-2 rounded-xl text-white text-sm outline-none" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.06)" }} placeholder="Mensaje..." value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendChat()} /><button onClick={sendChat} className="px-3.5 py-2 rounded-xl text-white text-sm font-semibold hover:scale-105 transition-all" style={{ background: "linear-gradient(135deg,#dc2626,#f97316)" }}>➤</button></div>
-          </div>
+          <ChatBox chatMsgs={chatMsgs} chatInput={chatInput} setChatInput={setChatInput} sendChat={sendChat} myId={myId} players={gs.players} tab={tab} accentGrad="linear-gradient(135deg,#dc2626,#f97316)" />
         </div>
 
         {/* Result */}
