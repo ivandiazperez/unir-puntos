@@ -2,6 +2,8 @@ import { useState } from "react";
 import UnirPuntos from "./games/UnirPuntos";
 import TresEnRaya from "./games/TresEnRaya";
 import HundirFlota from "./games/HundirFlota";
+import Bolos from "./games/Bolos";
+import Petanca from "./games/Petanca";
 
 const PASSWORD = "puntos2026";
 
@@ -14,6 +16,7 @@ const STYLES = `
 @keyframes float1 { 0%,100%{transform:translateY(0) rotate(0deg)} 50%{transform:translateY(-12px) rotate(3deg)} }
 @keyframes float2 { 0%,100%{transform:translateY(0) rotate(0deg)} 50%{transform:translateY(-8px) rotate(-2deg)} }
 @keyframes float3 { 0%,100%{transform:translateY(0) rotate(0deg)} 50%{transform:translateY(-15px) rotate(2deg)} }
+@keyframes float4 { 0%,100%{transform:translateY(0) rotate(0deg)} 50%{transform:translateY(-10px) rotate(-1.5deg)} }
 .shake { animation: shake 0.45s ease-in-out; }
 `;
 
@@ -53,6 +56,26 @@ const GAMES = [
     gradient: "linear-gradient(135deg, #0369a1, #38bdf8)",
     shadow: "0 8px 30px rgba(56,189,248,0.25)",
     float: "float3",
+  },
+  {
+    id: "bolos",
+    title: "Bolos",
+    subtitle: "Bowling multijugador",
+    emoji: "🎳",
+    desc: "Elige peso, efecto, fuerza y trayectoria. Vista 3D o 2D. 10 frames por jugador",
+    gradient: "linear-gradient(135deg, #dc2626, #f97316)",
+    shadow: "0 8px 30px rgba(249,115,22,0.25)",
+    float: "float1",
+  },
+  {
+    id: "petanca",
+    title: "Petanca",
+    subtitle: "Pétanque / Bocce",
+    emoji: "🥎",
+    desc: "Lanza tus bolas lo más cerca del boliche. Controla ángulo, fuerza y parábola",
+    gradient: "linear-gradient(135deg, #a16207, #eab308)",
+    shadow: "0 8px 30px rgba(234,179,8,0.25)",
+    float: "float4",
   },
 ];
 
@@ -102,6 +125,8 @@ export default function App() {
   if (activeGame === "unir-puntos") return <UnirPuntos onBack={() => setActiveGame(null)} />;
   if (activeGame === "tres-en-raya") return <TresEnRaya onBack={() => setActiveGame(null)} />;
   if (activeGame === "hundir-flota") return <HundirFlota onBack={() => setActiveGame(null)} />;
+  if (activeGame === "bolos") return <Bolos onBack={() => setActiveGame(null)} />;
+  if (activeGame === "petanca") return <Petanca onBack={() => setActiveGame(null)} />;
 
   // ═══ LANDING ═══
   return (
@@ -126,7 +151,7 @@ export default function App() {
         </div>
 
         {/* Game Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 w-full max-w-3xl">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 sm:gap-4 w-full max-w-5xl">
           {GAMES.map((game, i) => (
             <button
               key={game.id}
